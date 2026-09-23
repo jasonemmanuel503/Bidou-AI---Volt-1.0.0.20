@@ -488,13 +488,6 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
     const variantId = variant.id;
     const takeNumber = (variant.variant_index ?? 0) + 1;
 
-    // Optimistically update canvas stackedVariants
-    setStackedVariants((prev) => {
-      const existing = prev[job.id] || job.variants || [];
-      const updated = existing.filter((v) => v.id !== variantId);
-      return { ...prev, [job.id]: updated };
-    });
-
     // Optimistically update localHistoryJobs
     setLocalHistoryJobs((prev) =>
       prev
@@ -515,7 +508,7 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
       if (onDeleteJobVariant) {
         await onDeleteJobVariant(job.id, variantId);
       } else {
-        const token = accessToken || (await persistence.getAccessToken());
+        const token = accessToken || (await getAuthToken());
         const res = await fetch(`/api/ai/variant/${variantId}`, {
           method: 'DELETE',
           headers: {
@@ -772,99 +765,6 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
   const outerWidth = useElementWidth(canvasContainerRef);
   const innerBatchesRef = useRef<HTMLDivElement>(null);
   const innerWidth = useElementWidth(innerBatchesRef);
-  const [activeJobIds, setActiveJobIds] = useState<string[]>([]);
-  const [stackedJobs, setStackedJobs] = useState<Record<string, GenerationJob>>({});
-  const [stackedVariants, setStackedVariants] = useState<Record<string, GenerationJobVariant[]>>({});
-
-  const prevTabRef = useRef<GenerationType>(activeTab);
-  useEffect(() => {
-    if (prevTabRef.current !== activeTab) {
-      prevTabRef.current = activeTab;
-      if (currentJob && currentJob.type === activeTab) {
-        setActiveJobIds([currentJob.id]);
-        setStackedJobs({ [currentJob.id]: currentJob });
-        setStackedVariants({
-          [currentJob.id]:
-            variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
-              ? variants
-              : variantsForJob(currentJob),
-        });
-      } else {
-        setActiveJobIds([]);
-        setStackedJobs({});
-        setStackedVariants({});
-      }
-    }
-  }, [activeTab, currentJob, variants]);
-
-  useEffect(() => {
-    if (!currentJob || currentJob.type !== activeTab) return;
-
-    setStackedJobs((prev) => ({
-      ...prev,
-      [currentJob.id]: currentJob,
-    }));
-
-    const jobVars =
-      variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
-        ? variants
-        : variantsForJob(currentJob);
-
-    setStackedVariants((prev) => ({
-      ...prev,
-      [currentJob.id]: jobVars,
-    }));
-
-    setActiveJobIds((prev) => {
-      if (prev.includes(currentJob.id)) {
-        return prev;
-      }
-      return [...prev, currentJob.id];
-    });
-  }, [currentJob, variants, activeTab]);
-
-  // Derive displayed items (variants + parent job) across stacked batches (Section 3.4)
-  const displayItems = useMemo(() => {
-    if (activeJobIds.length === 0) {
-      if (!currentJob || currentJob.type !== activeTab) return [];
-      const currentVars =
-        variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
-          ? variants
-          : variantsForJob(currentJob);
-      return currentVars.map((v, idx) => ({
-        variant: v,
-        job: currentJob,
-        globalIndex: idx,
-      }));
-    }
-
-    const items: Array<{
-      variant: GenerationJobVariant;
-      job: GenerationJob;
-      globalIndex: number;
-    }> = [];
-
-    let gIdx = 0;
-    for (const jId of activeJobIds) {
-      const job =
-        stackedJobs[jId] ||
-        (currentJob?.id === jId ? currentJob : historyJobs.find((h) => h.id === jId));
-      if (!job) continue;
-      const vars =
-        stackedVariants[jId] ||
-        (currentJob?.id === jId && variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
-          ? variants
-          : variantsForJob(job));
-      for (const v of vars) {
-        items.push({
-          variant: v,
-          job,
-          globalIndex: gIdx++,
-        });
-      }
-    }
-    return items;
-  }, [activeJobIds, stackedJobs, stackedVariants, currentJob, variants, historyJobs, activeTab]);
 
   // Modelled progress timer
   const [now, setNow] = useState(Date.now());
@@ -999,40 +899,64 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
   // Aspect-ratio and slot-based geometry model (Section 3.4 & Phase 2)
   const isMusic = renderType === 'music';
 
+  // Derive stacked render-canvas batches directly from canonical localHistoryJobs + live currentJob (Bug 3 architectural resolution)
   const batches = useMemo(() => {
     const batchList: Array<{
       job: GenerationJob;
       variants: GenerationJobVariant[];
     }> = [];
+    const seenJobIds = new Set<string>();
 
-    const jobIdsToUse =
-      activeJobIds.length > 0
-        ? activeJobIds
-        : currentJob && currentJob.type === activeTab
-        ? [currentJob.id]
-        : [];
-
-    for (const jId of jobIdsToUse) {
-      const job =
-        stackedJobs[jId] ||
-        (currentJob?.id === jId ? currentJob : historyJobs.find((h) => h.id === jId));
-      if (!job) continue;
-      if (job.type !== activeTab && (job as any).media_type !== activeTab) continue;
-
-      const vars =
-        stackedVariants[jId] ||
-        (currentJob?.id === jId && variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
+    // 1. Current active or selected job (if matching active media type)
+    if (currentJob && (currentJob.type === activeTab || (currentJob as any).media_type === activeTab)) {
+      seenJobIds.add(currentJob.id);
+      const curVars =
+        variants && variants.length > 0 && variants[0]?.job_id === currentJob.id
           ? variants
-          : variantsForJob(job));
+          : variantsForJob(currentJob);
+      batchList.push({
+        job: currentJob,
+        variants: curVars,
+      });
+    }
+
+    // 2. Derive recent jobs for this tab from localHistoryJobs (canonical single source of truth)
+    const MAX_CANVAS_BATCHES = 8;
+    for (const job of localHistoryJobs) {
+      if (batchList.length >= MAX_CANVAS_BATCHES) break;
+      if (job.type !== activeTab && (job as any).media_type !== activeTab) continue;
+      if (seenJobIds.has(job.id)) continue;
+      seenJobIds.add(job.id);
 
       batchList.push({
         job,
-        variants: vars,
+        variants: variantsForJob(job),
       });
     }
 
     return batchList;
-  }, [activeJobIds, stackedJobs, stackedVariants, currentJob, variants, historyJobs, activeTab]);
+  }, [currentJob, variants, localHistoryJobs, activeTab]);
+
+  // Derive displayed items (variants + parent job) across stacked batches (Section 3.4)
+  const displayItems = useMemo(() => {
+    const items: Array<{
+      variant: GenerationJobVariant;
+      job: GenerationJob;
+      globalIndex: number;
+    }> = [];
+
+    let gIdx = 0;
+    for (const batch of batches) {
+      for (const v of batch.variants) {
+        items.push({
+          variant: v,
+          job: batch.job,
+          globalIndex: gIdx++,
+        });
+      }
+    }
+    return items;
+  }, [batches]);
 
   const totalTilesInCanvas = displayItems.length;
 
@@ -1040,18 +964,12 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
     if (currentJob && (currentJob.status === 'queued' || currentJob.status === 'processing')) {
       return true;
     }
-    return activeJobIds.some((jId) => {
-      const j = stackedJobs[jId];
-      return j && (j.status === 'queued' || j.status === 'processing');
-    });
-  }, [currentJob, activeJobIds, stackedJobs]);
+    return batches.some((b) => b.job.status === 'queued' || b.job.status === 'processing');
+  }, [currentJob, batches]);
 
   const hasItems = batches.some((b) => b.variants.length > 0);
 
   const handleSelectHistory = (job: GenerationJob) => {
-    setActiveJobIds([job.id]);
-    setStackedJobs({ [job.id]: job });
-    setStackedVariants({ [job.id]: variantsForJob(job) });
     if (onSelectHistoryJob) {
       onSelectHistoryJob(job);
     }
@@ -2685,7 +2603,6 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
 
             const previousItems = lightboxItems ? [...lightboxItems] : [];
             const previousIndex = lightboxInitialIndex;
-            const previousStacked = { ...stackedVariants };
             const previousLocalJobs = [...localHistoryJobs];
 
             const deletedIndex = previousItems.findIndex(
@@ -2707,12 +2624,8 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
               setLightboxItems(remainingItems);
             }
 
-            // Also optimistically update background canvas stackedVariants & localHistoryJobs
+            // Also optimistically update localHistoryJobs
             if (item.jobId) {
-              setStackedVariants((prev) => {
-                const existing = prev[item.jobId!] || [];
-                return { ...prev, [item.jobId!]: existing.filter((v) => v.id !== variantId) };
-              });
               setLocalHistoryJobs((prev) =>
                 prev
                   .map((j) => {
@@ -2736,7 +2649,7 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
               if (onDeleteJobVariant && item.jobId) {
                 await onDeleteJobVariant(item.jobId, variantId);
               } else {
-                const token = accessToken || (await persistence.getAccessToken());
+                const token = accessToken || (await getAuthToken());
                 const res = await fetch(`/api/ai/variant/${variantId}`, {
                   method: 'DELETE',
                   headers: {
@@ -2757,7 +2670,6 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
               console.error('Failed to trash variant from lightbox:', err);
               setLightboxItems(previousItems);
               setLightboxInitialIndex(previousIndex);
-              setStackedVariants(previousStacked);
               setLocalHistoryJobs(previousLocalJobs);
               toast.error(`Failed to move Take ${takeNumber} to trash: ${err?.message || 'Error'}`);
               throw err;

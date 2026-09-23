@@ -27,7 +27,7 @@ import { quoteGenerationCost } from './services/pricingEngine';
 import { persistence, hasSupabaseEnv, getSupabaseClient } from './services/persistence';
 import { resetFavorites } from './hooks/useFavorites';
 import { clearMediaUrlCache } from './services/media';
-import { setCurrentUserId } from './services/authToken';
+import { setCurrentUserId, getAuthToken } from './services/authToken';
 import { newId } from './services/ids';
 import { useProjects } from './hooks/useProjects';
 import { ToastContainer } from './components/common/ToastContainer';
@@ -228,7 +228,7 @@ export default function App() {
 
     // 1. Authoritative server check via /api/credits/wallet if session token exists
     try {
-      const rawToken = await persistence.getAccessToken();
+      const rawToken = await getAuthToken();
       const sessionToken = rawToken || (hasSupabaseEnv() ? null : targetId || 'usr_amina_01');
       if (sessionToken) {
         const res = await fetch('/api/credits/wallet', {
@@ -297,9 +297,9 @@ export default function App() {
   // Per-user state hygiene on user ID change
   const prevUserIdRef = useRef<string>(user.id);
   useEffect(() => {
+    setCurrentUserId(user.id || null);
     if (prevUserIdRef.current && prevUserIdRef.current !== user.id) {
       resetUserSession();
-      setCurrentUserId(user.id || null);
       if (user.id) {
         refreshWallet(user.id);
       } else {
@@ -554,8 +554,8 @@ export default function App() {
     }
     const fetchRecentJobs = async () => {
       try {
-        const token = await persistence.getAccessToken();
-        if (token) setAccessToken(token);
+        const token = await getAuthToken();
+        if (token && hasSupabaseEnv()) setAccessToken(token);
         const res = await fetch('/api/ai/jobs', {
           headers: token
             ? { Authorization: `Bearer ${token}` }
@@ -755,7 +755,7 @@ export default function App() {
     }
 
     // Real server-authoritative generation via POST /api/ai/generate
-    const rawToken = await persistence.getAccessToken();
+    const rawToken = await getAuthToken();
     const accessToken = rawToken || (hasSupabaseEnv() ? null : user.id || 'usr_amina_01');
     if (!accessToken) {
       setCurrentJob({
@@ -1214,7 +1214,7 @@ export default function App() {
     }
 
     try {
-      const token = accessToken || (await persistence.getAccessToken());
+      const token = accessToken || (await getAuthToken());
       const res = await fetch('/api/trash', {
         method: 'POST',
         headers: {
