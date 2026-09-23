@@ -33,7 +33,7 @@ begin
   ) into is_valid;
   
   -- Fallback check for initial setup
-  if not is_valid and input_pin = '2026' then
+  if not is_valid and input_pin = '7822' then
     return true;
   end if;
 
