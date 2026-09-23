@@ -199,6 +199,7 @@ export const TrashView: React.FC<TrashViewProps> = ({
       url: ti.output_url || ti.thumbnail_url || '',
       thumbnailUrl: ti.thumbnail_url,
       prompt: ti.prompt,
+      modelId: (ti as any).model_id,
       modelName: ti.model_name,
       aspectRatio: ti.aspect_ratio,
       variantId: ti.id,

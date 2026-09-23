@@ -636,11 +636,21 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
       );
 
       setUpscaleSuccessScale(targetScale);
-      setStatusAnnouncement(`Upscale to ${targetScale} completed successfully.`);
+      setStatusAnnouncement(`Upscale to ${targetScale} completed. Starting download...`);
       onRefreshWallet?.();
+
+      // Auto-trigger download of the upscaled asset
+      if (outputUrl) {
+        const ext = activeMenuJob.type === 'video' ? 'mp4' : 'png';
+        const filename = `bidou-${activeMenuJob.type}-${activeMenuJob.id.slice(0, 8)}-${targetScale}.${ext}`;
+        downloadAsset(outputUrl, filename, { showToast: true }).catch((err) => {
+          console.warn('[DedicatedPreviewCanvas] Auto-download after upscale failed:', err);
+        });
+      }
+
       setTimeout(() => {
         handleCloseMenu();
-      }, 1100);
+      }, 1500);
     } catch (err: any) {
       setUpscaleError(err.message || 'Upscale failed. Please try again.');
     } finally {
@@ -977,6 +987,7 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
           thumbnailUrl: variant.thumbnail_url || j.thumbnail_url,
           coverArtUrl: j.cover_art_url,
           prompt: j.prompt,
+          modelId: j.model_id,
           modelName: j.model_name,
           creditCost: variant.credits_unit || j.credit_cost,
           resolution: j.resolution,
@@ -1006,6 +1017,7 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
         thumbnailUrl: v.thumbnail_url || j.thumbnail_url,
         coverArtUrl: j.cover_art_url,
         prompt: j.prompt,
+        modelId: j.model_id,
         modelName: j.model_name,
         creditCost: v.credits_unit || j.credit_cost,
         resolution: j.resolution,
@@ -2577,6 +2589,8 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
           initialIndex={lightboxInitialIndex}
           mode={lightboxMode}
           onModeChange={setLightboxMode}
+          models={models}
+          onRefreshWallet={onRefreshWallet}
           onClose={() => setLightboxItems(null)}
           onRemix={(prompt, type) => {
             onRemixPrompt?.(prompt, type);

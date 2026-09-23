@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -19,10 +19,19 @@ import {
   RefreshCw,
   Wand2,
   Loader2,
+  CheckCircle2,
+  AlertCircle,
+  AlertTriangle,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { CircularAudioPlayer } from './CircularAudioPlayer';
 import { usePlayableUrl, posterFor } from '../../services/media';
 import { downloadAsset, getAssetFilename } from '../../lib/downloadAsset';
+import { AiModelConfig } from '../../types';
+import { INITIAL_AI_MODELS } from '../../services/configData';
+import { getAuthToken } from '../../services/authToken';
+import { toast } from '../../services/toast';
+import { formatApiError } from '../../lib/errorMapping';
 
 export interface LightboxItem {
   id: string;
@@ -31,6 +40,7 @@ export interface LightboxItem {
   thumbnailUrl?: string;
   coverArtUrl?: string;
   prompt?: string;
+  modelId?: string;
   modelName?: string;
   resolution?: string;
   durationSeconds?: number;
@@ -55,6 +65,8 @@ export interface MediaLightboxProps {
   onRestore?: (item: LightboxItem) => void;
   onRemix?: (prompt: string, type: any) => void;
   onReusePrompt?: (job: any) => void;
+  models?: AiModelConfig[];
+  onRefreshWallet?: () => void;
 }
 
 /**
@@ -166,6 +178,8 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
   onRestore,
   onRemix,
   onReusePrompt,
+  models,
+  onRefreshWallet,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(
     Math.max(0, Math.min(initialIndex, items.length - 1))
@@ -179,6 +193,18 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
   };
   const [isMuted, setIsMuted] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Pre-download choice and upscale states
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [isUpscalingScale, setIsUpscalingScale] = useState<string | null>(null);
+  const [upscaleSuccessScale, setUpscaleSuccessScale] = useState<string | null>(null);
+  const [upscaleError, setUpscaleError] = useState<{
+    message: string;
+    type: 'upscale' | 'download';
+    downloadUrl?: string;
+    scale?: string;
+  } | null>(null);
+  const downloadMenuRef = useRef<HTMLDivElement | null>(null);
 
   // References for focus trap & scroll lock
   const triggerElementRef = useRef<Element | null>(null);
@@ -378,6 +404,50 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
   // Render poster src with media-fragment fallback
   const posterSrc = currentItem.thumbnailUrl ?? `${currentItem.url}#t=0.1`;
 
+  // Determine available scales based on producing model max_upscale
+  const availableScales = useMemo(() => {
+    if (!currentItem || currentItem.type !== 'image') return [];
+    const modelList = models && models.length > 0 ? models : INITIAL_AI_MODELS;
+    const model = modelList.find(
+      (m) =>
+        (currentItem.modelId && m.id === currentItem.modelId) ||
+        (currentItem.modelName && (m.model_name === currentItem.modelName || m.display_name === currentItem.modelName)) ||
+        (currentItem.rawItem?.model_id && m.id === currentItem.rawItem.model_id) ||
+        (currentItem.rawItem?.model_name && m.model_name === currentItem.rawItem.model_name) ||
+        (currentItem.rawItem?.job?.model_id && m.id === currentItem.rawItem.job.model_id) ||
+        (currentItem.rawItem?.job?.model_name && m.model_name === currentItem.rawItem.job.model_name)
+    );
+    const maxScale = model?.max_upscale || '2k';
+    const SCALE_ORDER: Record<string, number> = { '720p': 1, '1080p': 2, '1k': 2, '2k': 3, '4k': 4 };
+    const maxRank = SCALE_ORDER[maxScale] || 3;
+
+    const list = [
+      { scale: '1k', label: '1K Standard', cost: 35, rank: 2 },
+      { scale: '2k', label: '2K Quad HD', cost: 70, rank: 3 },
+      { scale: '4k', label: '4K Ultra HD', cost: 140, rank: 4 },
+    ];
+    return list.filter((item) => item.rank <= maxRank);
+  }, [currentItem, models]);
+
+  // Reset menu and error states when changing item
+  useEffect(() => {
+    setShowDownloadMenu(false);
+    setUpscaleError(null);
+    setUpscaleSuccessScale(null);
+  }, [currentIndex, currentItem?.id]);
+
+  // Click outside listener for download menu popover
+  useEffect(() => {
+    if (!showDownloadMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (downloadMenuRef.current && !downloadMenuRef.current.contains(e.target as Node)) {
+        setShowDownloadMenu(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [showDownloadMenu]);
+
   // Default download handler if none passed
   const triggerDownload = async () => {
     if (onDownload) {
@@ -385,6 +455,162 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
     } else {
       const filename = getAssetFilename(currentItem.type, currentItem.id);
       await downloadAsset(currentItem.url, filename, { showToast: true });
+    }
+  };
+
+  // Main Download button trigger (opens menu for images, direct download for other media)
+  const handleMainDownloadClick = () => {
+    if (currentItem.type === 'image') {
+      setShowDownloadMenu((prev) => !prev);
+    } else {
+      triggerDownload();
+    }
+  };
+
+  // Download original asset handler
+  const handleDownloadOriginal = async () => {
+    setShowDownloadMenu(false);
+    if (onDownload) {
+      onDownload(currentItem);
+    } else {
+      const filename = getAssetFilename(currentItem.type, currentItem.id);
+      await downloadAsset(currentItem.url, filename, { showToast: true });
+    }
+  };
+
+  // Synchronous upscale request with automatic post-upscale download
+  const handleUpscaleAndDownload = async (targetScale: string) => {
+    if (!currentItem || isUpscalingScale) return;
+    const variantId =
+      currentItem.variantId ||
+      currentItem.rawItem?.variant?.id ||
+      currentItem.rawItem?.id ||
+      currentItem.id;
+    if (!variantId) {
+      toast.error('Unable to locate variant ID for upscale');
+      return;
+    }
+
+    // Fast-path: Check if this scale was already upscaled and cached
+    const existingUrl =
+      currentItem.rawItem?.variant?.upscaled_urls?.[targetScale] ||
+      currentItem.rawItem?.upscaled_urls?.[targetScale];
+
+    if (existingUrl) {
+      const filename = getAssetFilename(currentItem.type, currentItem.id, targetScale);
+      try {
+        await downloadAsset(existingUrl, filename, { showToast: true, throwOnError: true });
+        setShowDownloadMenu(false);
+      } catch (err: any) {
+        setUpscaleError({
+          message: "Upscaled image is ready, but download couldn't start — tap to retry.",
+          type: 'download',
+          downloadUrl: existingUrl,
+          scale: targetScale,
+        });
+      }
+      return;
+    }
+
+    setIsUpscalingScale(targetScale);
+    setUpscaleError(null);
+    setUpscaleSuccessScale(null);
+    toast.info(`We're upscaling your image to ${targetScale.toUpperCase()} — download will start automatically when finished.`);
+
+    try {
+      const token = getAuthToken();
+      const idempotencyKey = crypto.randomUUID();
+
+      const res = await fetch(`/api/ai/variant/${variantId}/upscale`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'idempotency-key': idempotencyKey,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ targetScale, idempotencyKey }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        let msg = data.detail || data.error || 'Upscale failed';
+        if (data.error === 'INSUFFICIENT_CREDITS') {
+          msg = `Insufficient credits. Need ${data.required || 35} credits.`;
+        } else {
+          msg = formatApiError(data.error, data.detail);
+        }
+        setUpscaleError({ message: msg, type: 'upscale', scale: targetScale });
+        toast.error(msg);
+        return;
+      }
+
+      const outputUrl = data.outputUrl || data.upscale?.output_url;
+      if (!outputUrl) {
+        throw new Error('No output URL returned from upscale service');
+      }
+
+      // Update variant cached upscaled URLs in memory if present
+      if (currentItem.rawItem) {
+        if (currentItem.rawItem.variant) {
+          if (!currentItem.rawItem.variant.upscaled_urls) {
+            currentItem.rawItem.variant.upscaled_urls = {};
+          }
+          currentItem.rawItem.variant.upscaled_urls[targetScale] = outputUrl;
+        }
+        if (!currentItem.rawItem.upscaled_urls) {
+          currentItem.rawItem.upscaled_urls = {};
+        }
+        currentItem.rawItem.upscaled_urls[targetScale] = outputUrl;
+      }
+
+      onRefreshWallet?.();
+
+      // Trigger automatic download of upscaled asset
+      const filename = getAssetFilename(currentItem.type, currentItem.id, targetScale);
+      try {
+        await downloadAsset(outputUrl, filename, { showToast: false, throwOnError: true });
+        setUpscaleSuccessScale(targetScale);
+        toast.success(`Upscale to ${targetScale.toUpperCase()} complete! Download started.`);
+        setTimeout(() => {
+          setShowDownloadMenu(false);
+          setUpscaleSuccessScale(null);
+        }, 1800);
+      } catch (dlErr: any) {
+        console.warn('Upscaled download failed:', dlErr);
+        setUpscaleError({
+          message: "Upscale finished, but the download couldn't start — tap to retry.",
+          type: 'download',
+          downloadUrl: outputUrl,
+          scale: targetScale,
+        });
+        toast.warning("Upscale finished, but the download couldn't start — tap to retry.");
+      }
+    } catch (err: any) {
+      console.error('Upscale operation failed:', err);
+      const msg = err.message || 'Failed to upscale image. Please try again.';
+      setUpscaleError({ message: msg, type: 'upscale', scale: targetScale });
+      toast.error(msg);
+    } finally {
+      setIsUpscalingScale(null);
+    }
+  };
+
+  // Retry manual download handler for upscale completion
+  const handleRetryDownload = async (url: string, scale?: string) => {
+    if (!currentItem) return;
+    try {
+      const filename = getAssetFilename(currentItem.type, currentItem.id, scale);
+      await downloadAsset(url, filename, { showToast: true, throwOnError: true });
+      setUpscaleError(null);
+      setUpscaleSuccessScale(scale || 'done');
+      toast.success('Download started successfully!');
+      setTimeout(() => {
+        setShowDownloadMenu(false);
+        setUpscaleSuccessScale(null);
+      }, 1500);
+    } catch (err: any) {
+      console.warn('Retry download failed, opening fallback in new tab:', err);
+      window.open(url, '_blank', 'noopener');
     }
   };
 
@@ -703,14 +929,214 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={triggerDownload}
-              className="px-4 py-1.5 rounded-xl bg-brand-gradient hover:opacity-90 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
-            >
-              <Download size={14} />
-              <span>Download</span>
-            </button>
+            {/* Download button with pre-download choice popover for images */}
+            <div className="relative" ref={downloadMenuRef}>
+              <button
+                type="button"
+                onClick={handleMainDownloadClick}
+                disabled={!!isUpscalingScale}
+                className="px-4 py-1.5 rounded-xl bg-brand-gradient hover:opacity-90 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer disabled:opacity-70"
+                aria-haspopup={currentItem.type === 'image' ? 'dialog' : undefined}
+                aria-expanded={showDownloadMenu}
+              >
+                {isUpscalingScale ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin text-white" />
+                    <span>Upscaling ({isUpscalingScale.toUpperCase()})...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download size={14} />
+                    <span>Download</span>
+                  </>
+                )}
+              </button>
+
+              {/* Pre-Download Interstitial Popover */}
+              <AnimatePresence>
+                {showDownloadMenu && currentItem.type === 'image' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.16 }}
+                    className="absolute bottom-full right-0 mb-3 w-72 sm:w-84 max-w-[calc(100vw-32px)] rounded-2xl bg-[#18181B]/95 dark:bg-[#121215]/95 backdrop-blur-2xl border border-white/15 p-3.5 shadow-2xl z-50 text-left"
+                    role="dialog"
+                    aria-label="Download options"
+                  >
+                    {/* Header */}
+                    <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-white/10">
+                      <div className="flex items-center gap-2">
+                        <Download size={14} className="text-[#FF8800]" />
+                        <span className="text-xs font-bold text-white">Download Options</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowDownloadMenu(false)}
+                        className="p-1 rounded-lg text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                        aria-label="Close download menu"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+
+                    {/* Option: Download Original */}
+                    <button
+                      type="button"
+                      onClick={handleDownloadOriginal}
+                      disabled={!!isUpscalingScale}
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/10 text-white transition-colors group cursor-pointer disabled:opacity-50"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-zinc-300 group-hover:text-white transition-colors">
+                          <ImageIcon size={15} />
+                        </div>
+                        <div className="text-left">
+                          <div className="text-xs font-semibold text-white">Original Quality</div>
+                          <div className="text-[10px] text-zinc-400">Download directly as generated</div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
+                        Free
+                      </span>
+                    </button>
+
+                    {/* Upscale Tiers Section */}
+                    {availableScales.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-2 my-2.5 px-1">
+                          <div className="h-px bg-white/10 flex-1" />
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400">
+                            Upscale with AI & Download
+                          </span>
+                          <div className="h-px bg-white/10 flex-1" />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          {availableScales.map((tier) => {
+                            const isCurrent = isUpscalingScale === tier.scale;
+                            const isCached = !!(
+                              currentItem.rawItem?.variant?.upscaled_urls?.[tier.scale] ||
+                              currentItem.rawItem?.upscaled_urls?.[tier.scale]
+                            );
+
+                            return (
+                              <button
+                                key={tier.scale}
+                                type="button"
+                                disabled={!!isUpscalingScale}
+                                onClick={() => handleUpscaleAndDownload(tier.scale)}
+                                className="w-full flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-[#FF8800]/40 text-white transition-all group cursor-pointer disabled:opacity-50"
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-8 h-8 rounded-lg bg-[#FF8800]/10 border border-[#FF8800]/20 flex items-center justify-center text-[#FF8800] group-hover:bg-[#FF8800]/20 transition-colors">
+                                    {isCurrent ? (
+                                      <Loader2 size={15} className="animate-spin text-[#FF8800]" />
+                                    ) : (
+                                      <Sparkles size={15} />
+                                    )}
+                                  </div>
+                                  <div className="text-left">
+                                    <div className="text-xs font-semibold text-white">
+                                      {tier.label}
+                                    </div>
+                                    <div className="text-[10px] text-zinc-400">
+                                      {tier.scale === '4k'
+                                        ? 'Ultra HD 3840px enhanced clarity'
+                                        : tier.scale === '2k'
+                                        ? 'High-res 2048px enhanced clarity'
+                                        : 'Crisp 1080p standard enhancement'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div>
+                                  {isCached ? (
+                                    <span className="text-[10px] font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/20">
+                                      Ready
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-bold text-[#FF8800] bg-[#FF8800]/10 px-2 py-0.5 rounded-md border border-[#FF8800]/20">
+                                      {tier.cost} credits
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+
+                    {/* Upscale In-Progress Status Banner */}
+                    {isUpscalingScale && (
+                      <div className="mt-2.5 p-2.5 rounded-xl bg-[#FF8800]/10 border border-[#FF8800]/25 flex items-start gap-2.5 text-xs text-[#FF8800]">
+                        <Loader2 size={15} className="animate-spin shrink-0 mt-0.5 text-[#FF8800]" />
+                        <div className="leading-snug text-left">
+                          <span className="font-semibold text-white">
+                            Upscaling to {isUpscalingScale.toUpperCase()}...
+                          </span>
+                          <p className="text-[11px] text-zinc-300 dark:text-zinc-400 mt-0.5">
+                            We're upscaling your image — download will start automatically when it's finished.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Success State Banner */}
+                    {upscaleSuccessScale && (
+                      <div className="mt-2.5 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center gap-2 text-xs text-emerald-400">
+                        <CheckCircle2 size={15} className="shrink-0" />
+                        <span>Upscale complete! Download started.</span>
+                      </div>
+                    )}
+
+                    {/* Error State with Distinct Retry for CORS/Download vs Upscale failure */}
+                    {upscaleError && (
+                      <div
+                        className={`mt-2.5 p-2.5 rounded-xl border flex flex-col gap-1.5 text-xs text-left ${
+                          upscaleError.type === 'download'
+                            ? 'bg-amber-500/10 border-amber-500/25 text-amber-300'
+                            : 'bg-rose-500/10 border-rose-500/25 text-rose-300'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          {upscaleError.type === 'download' ? (
+                            <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-400" />
+                          ) : (
+                            <AlertCircle size={15} className="shrink-0 mt-0.5 text-rose-400" />
+                          )}
+                          <div className="flex-1">
+                            <div className="font-semibold text-white">
+                              {upscaleError.type === 'download' ? 'Download Interrupted' : 'Upscale Failed'}
+                            </div>
+                            <p className="text-[11px] mt-0.5 leading-snug">{upscaleError.message}</p>
+                          </div>
+                        </div>
+
+                        {upscaleError.type === 'download' && upscaleError.downloadUrl && (
+                          <div className="flex items-center gap-2 mt-1 pt-1.5 border-t border-amber-500/20">
+                            <button
+                              type="button"
+                              onClick={() => handleRetryDownload(upscaleError.downloadUrl!, upscaleError.scale)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-semibold text-[11px] transition-colors cursor-pointer"
+                            >
+                              Tap to Retry
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => window.open(upscaleError.downloadUrl!, '_blank', 'noopener')}
+                              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white font-medium text-[11px] transition-colors cursor-pointer"
+                            >
+                              Open in New Tab
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {onDelete && (
               <button

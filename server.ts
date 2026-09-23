@@ -108,7 +108,7 @@ const ALLOWED = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,https://b
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && ALLOWED.includes(origin)) {
+  if (origin && (ALLOWED.includes(origin) || origin.includes('.run.app') || origin.includes('localhost') || origin.includes('127.0.0.1'))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin'); // or caches will cross-serve
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -467,6 +467,7 @@ app.all('/api/media/:variantId', async (req, res) => {
       const size = stat.size;
       const range = req.headers.range;
 
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
       res.setHeader('Content-Type', source.contentType);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -551,6 +552,7 @@ app.all('/api/media/:variantId', async (req, res) => {
       });
 
       res.status(upstream.status);
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
       const contentType = upstream.headers.get('content-type') || source.contentType;
       res.setHeader('Content-Type', contentType);
       res.setHeader('Accept-Ranges', 'bytes');

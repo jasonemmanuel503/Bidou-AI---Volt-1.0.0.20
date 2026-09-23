@@ -104,6 +104,7 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
       thumbnailUrl: item.thumbnail_url,
       coverArtUrl: item.cover_art_url,
       prompt: item.prompt,
+      modelId: (item as any).model_id,
       modelName: item.model_name,
       aspectRatio: item.aspect_ratio,
       resolution: item.resolution,

@@ -295,6 +295,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
       thumbnailUrl: pi.thumbnail_url,
       coverArtUrl: pi.cover_art_url,
       prompt: pi.prompt,
+      modelId: (pi as any).model_id,
       modelName: pi.model_name,
       creditCost: pi.credits_unit,
       resolution: pi.resolution,
