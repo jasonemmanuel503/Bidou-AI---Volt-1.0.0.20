@@ -18,6 +18,7 @@ import { useProjects } from '../../hooks/useProjects';
 import { useTrash } from '../../hooks/useTrash';
 import { toast } from '../../services/toast';
 import { AnchoredMenu } from './AnchoredMenu';
+import { downloadAsset, getAssetFilename } from '../../lib/downloadAsset';
 
 export interface VariantActionsMenuProps {
   item: LibraryItem;
@@ -92,28 +93,8 @@ export const VariantActionsMenu: React.FC<VariantActionsMenuProps> = ({
     if (!item.output_url) return;
     setIsDownloading(true);
     try {
-      const ext =
-        item.media_type === 'video'
-          ? 'mp4'
-          : item.media_type === 'music'
-          ? 'mp3'
-          : 'png';
-      const filename = `bidou-${item.media_type || 'asset'}-${item.id.slice(0, 8)}.${ext}`;
-
-      const res = await fetch(item.output_url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objectUrl);
-      toast.success('Asset downloaded');
-    } catch {
-      window.open(item.output_url, '_blank', 'noopener');
+      const filename = getAssetFilename(item.media_type, item.id);
+      await downloadAsset(item.output_url, filename, { showToast: true });
     } finally {
       setIsDownloading(false);
       handleClose();

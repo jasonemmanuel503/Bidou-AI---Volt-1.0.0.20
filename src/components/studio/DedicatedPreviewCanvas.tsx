@@ -38,6 +38,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { GenerationJob, GenerationJobVariant, GenerationType, AiModelConfig, Project } from '../../types';
 import { BrandedLoader } from '../common/BrandedLoader';
 import { ProgressRing } from '../common/ProgressRing';
+import { downloadAsset } from '../../lib/downloadAsset';
 import { formatApiError } from '../../lib/errorMapping';
 import { MediaLightbox, LightboxItem } from '../common/MediaLightbox';
 import { CircularAudioPlayer } from '../common/CircularAudioPlayer';
@@ -567,20 +568,8 @@ export const DedicatedPreviewCanvas: React.FC<DedicatedPreviewCanvasProps> = ({
     try {
       setIsDownloading(true);
       setStatusAnnouncement('Downloading asset...');
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objectUrl);
+      await downloadAsset(url, filename, { showToast: true });
       setStatusAnnouncement('Download completed.');
-    } catch {
-      window.open(url, '_blank', 'noopener');
     } finally {
       setIsDownloading(false);
       if (accessToken && variantId) {

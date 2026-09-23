@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { CircularAudioPlayer } from './CircularAudioPlayer';
 import { usePlayableUrl, posterFor } from '../../services/media';
+import { downloadAsset, getAssetFilename } from '../../lib/downloadAsset';
 
 export interface LightboxItem {
   id: string;
@@ -378,18 +379,12 @@ export const MediaLightbox: React.FC<MediaLightboxProps> = ({
   const posterSrc = currentItem.thumbnailUrl ?? `${currentItem.url}#t=0.1`;
 
   // Default download handler if none passed
-  const triggerDownload = () => {
+  const triggerDownload = async () => {
     if (onDownload) {
       onDownload(currentItem);
     } else {
-      const a = document.createElement('a');
-      a.href = currentItem.url;
-      a.download = `bidou-${currentItem.type}-${currentItem.id.slice(0, 8)}`;
-      a.target = '_blank';
-      a.rel = 'noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const filename = getAssetFilename(currentItem.type, currentItem.id);
+      await downloadAsset(currentItem.url, filename, { showToast: true });
     }
   };
 

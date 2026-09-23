@@ -13,7 +13,7 @@ export const ToastContainer: React.FC = () => {
   }, []);
 
   return (
-    <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+    <div className="fixed bottom-5 inset-x-4 sm:inset-x-auto sm:right-5 sm:left-auto z-[9999] flex flex-col gap-2 max-w-sm sm:w-full mx-auto sm:mx-0 pointer-events-none">
       <AnimatePresence>
         {toasts.map((t) => {
           const isError = t.type === 'error';
