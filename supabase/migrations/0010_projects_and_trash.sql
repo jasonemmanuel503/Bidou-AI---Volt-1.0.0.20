@@ -27,10 +27,14 @@ create index if not exists projects_user_pos_idx
   on projects (user_id, position) where deleted_at is null;
 
 alter table projects enable row level security;
+drop policy if exists "own projects readable" on projects;
 create policy "own projects readable"  on projects for select using (auth.uid() = user_id);
+drop policy if exists "own projects insertable" on projects;
 create policy "own projects insertable" on projects for insert with check (auth.uid() = user_id);
+drop policy if exists "own projects updatable" on projects;
 create policy "own projects updatable"  on projects for update using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+drop policy if exists "own projects deletable" on projects;
 create policy "own projects deletable"  on projects for delete using (auth.uid() = user_id);
 
 -- B.1.2 — Membership join table. Replaces ProjectFolder.item_ids entirely.
@@ -51,10 +55,14 @@ create index if not exists project_items_project_pos_idx
 create index if not exists project_items_variant_idx on project_items (variant_id);
 
 alter table project_items enable row level security;
+drop policy if exists "own project items readable" on project_items;
 create policy "own project items readable"  on project_items for select using (auth.uid() = user_id);
+drop policy if exists "own project items insertable" on project_items;
 create policy "own project items insertable" on project_items for insert with check (auth.uid() = user_id);
+drop policy if exists "own project items updatable" on project_items;
 create policy "own project items updatable"  on project_items for update using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+drop policy if exists "own project items deletable" on project_items;
 create policy "own project items deletable"  on project_items for delete using (auth.uid() = user_id);
 
 -- B.1.3 — Keep projects.item_count honest without a count(*) per render.
@@ -127,7 +135,11 @@ begin
 end; $$;
 
 -- Enable the supabase_realtime publication for projects and project_items (Section B.5)
-alter publication supabase_realtime add table projects, project_items;
+do $pub$
+begin
+  alter publication supabase_realtime add table projects, project_items;
+exception when duplicate_object then null;
+end $pub$;
 
 -- ============================================================================
 -- SECTION D — Trash, restore & tiered retention
@@ -216,12 +228,10 @@ begin
 end; $$;
 
 -- D.2.6 — Sweep expired reservations via pg_cron if enabled
-do $$
+do $cron$
 begin
   if exists (select 1 from pg_extension where extname = 'pg_cron') then
     perform cron.schedule('sweep-reservations', '*/10 * * * *',
-                         $$select sweep_expired_reservations()$$);
+                         $job$select sweep_expired_reservations()$job$);
   end if;
-end; $$;
-
-
+end; $cron$;
