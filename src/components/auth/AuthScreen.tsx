@@ -13,6 +13,44 @@ export interface AuthScreenProps {
   onBackToLanding: () => void;
 }
 
+/**
+ * Turns raw Supabase/GoTrue errors into copy a user can act on.
+ * The raw error is always logged to the console for debugging.
+ */
+const friendlyAuthError = (raw: unknown): string => {
+  console.error('[auth] raw error:', raw);
+  const anyRaw = raw as any;
+  const msg = typeof raw === 'string' ? raw : anyRaw?.message || anyRaw?.msg || '';
+  const code = anyRaw?.error_code || anyRaw?.code || '';
+  const s = `${code} ${msg}`.toLowerCase();
+
+  if (s.includes('provider is not enabled') || s.includes('unsupported provider')) {
+    return 'Google sign-in is not available right now. Please continue with email or phone instead.';
+  }
+  if (s.includes('database error saving new user') || s.includes('unexpected_failure')) {
+    return "We couldn't create your account right now. Please try again in a moment. If it keeps happening, contact support.";
+  }
+  if (s.includes('invalid login credentials') || s.includes('invalid_credentials')) {
+    return 'Incorrect email/phone or password. Please try again.';
+  }
+  if (s.includes('already registered') || s.includes('user_already_exists')) {
+    return 'An account with these details already exists. Try signing in instead.';
+  }
+  if (s.includes('email not confirmed') || s.includes('email_not_confirmed')) {
+    return 'Please confirm your email address before signing in. Check your inbox for the confirmation link.';
+  }
+  if (s.includes('rate limit') || s.includes('over_email_send_rate_limit') || s.includes('too many')) {
+    return 'Too many attempts. Please wait a minute and try again.';
+  }
+  if (s.includes('weak_password') || s.includes('password should be')) {
+    return 'That password is too weak. Please choose a stronger one (at least 6 characters).';
+  }
+  if (s.includes('failed to fetch') || s.includes('networkerror') || s.includes('network')) {
+    return 'Network problem. Please check your connection and try again.';
+  }
+  return 'Something went wrong while signing you in. Please try again.';
+};
+
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   initialMode = 'signin',
   theme,
@@ -30,11 +68,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   // Validation & Loading
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setInfoMsg(null);
 
     // Validation checks
     if (!identifier.trim()) {
@@ -90,7 +130,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             },
           });
           if (error) {
-            setErrorMsg(error.message);
+            setErrorMsg(friendlyAuthError(error));
+            setIsLoading(false);
+            return;
+          }
+          if (data.user && !data.session) {
+            // Email confirmation is enabled: there is no session until the user confirms.
+            setInfoMsg(
+              inputMethod === 'email'
+                ? 'Account created! Check your inbox and click the confirmation link, then sign in.'
+                : 'Account created, but phone sign-ups cannot be confirmed right now. Please sign up with email instead.'
+            );
             setIsLoading(false);
             return;
           }
@@ -122,7 +172,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             password,
           });
           if (error) {
-            setErrorMsg(error.message);
+            setErrorMsg(friendlyAuthError(error));
             setIsLoading(false);
             return;
           }
@@ -144,7 +194,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           }
         }
       } catch (err: any) {
-        setErrorMsg(err?.message || 'Authentication error');
+        setErrorMsg(friendlyAuthError(err));
         setIsLoading(false);
         return;
       }
@@ -177,18 +227,55 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   const handleGoogleOneTap = async () => {
     setErrorMsg(null);
+    setInfoMsg(null);
     setIsLoading(true);
 
     if (hasSupabaseEnv()) {
       const supabase = getSupabaseClient()!;
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin,
-        },
-      });
-      if (error) {
-        setErrorMsg(error.message);
+      try {
+        // Ask for the provider URL instead of redirecting blindly. If Google is not
+        // enabled in Supabase, a blind redirect strands the user on a raw JSON error page.
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: window.location.origin,
+            skipBrowserRedirect: true,
+          },
+        });
+        if (error || !data?.url) {
+          setErrorMsg(friendlyAuthError(error || 'Google sign-in could not start'));
+          setIsLoading(false);
+          return;
+        }
+
+        // Preflight: surface "provider is not enabled" (HTTP 400) inside our own UI.
+        try {
+          const res = await fetch(data.url, { redirect: 'manual' });
+          if (res.type !== 'opaqueredirect' && res.status >= 400) {
+            let body: unknown = null;
+            try {
+              body = await res.json();
+            } catch {
+              // body was not JSON
+            }
+            setErrorMsg(friendlyAuthError(body || `HTTP ${res.status}`));
+            setIsLoading(false);
+            return;
+          }
+        } catch {
+          // Preflight blocked (CORS/network). Fall through and try the redirect anyway.
+        }
+
+        // Google refuses to load its sign-in page inside an iframe (e.g. an embedded preview).
+        if (window.self !== window.top) {
+          setErrorMsg('Google sign-in cannot run inside an embedded preview. Open the app in its own browser tab and try again.');
+          setIsLoading(false);
+          return;
+        }
+
+        window.location.assign(data.url);
+      } catch (err) {
+        setErrorMsg(friendlyAuthError(err));
         setIsLoading(false);
       }
       return;
@@ -248,6 +335,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               onClick={() => {
                 setMode('signin');
                 setErrorMsg(null);
+                setInfoMsg(null);
               }}
               className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 mode === 'signin'
@@ -262,6 +350,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               onClick={() => {
                 setMode('signup');
                 setErrorMsg(null);
+                setInfoMsg(null);
               }}
               className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 mode === 'signup'
@@ -341,6 +430,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 setInputMethod('email');
                 setIdentifier('');
                 setErrorMsg(null);
+                setInfoMsg(null);
               }}
               className={`flex items-center gap-1.5 pb-1 border-b-2 transition-all cursor-pointer ${
                 inputMethod === 'email'
@@ -357,6 +447,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 setInputMethod('phone');
                 setIdentifier('+237 ');
                 setErrorMsg(null);
+                setInfoMsg(null);
               }}
               className={`flex items-center gap-1.5 pb-1 border-b-2 transition-all cursor-pointer ${
                 inputMethod === 'phone'
@@ -374,6 +465,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             <div className="mb-4 p-3 rounded-2xl glass-panel border border-[#E74C3C]/40 bg-[#E74C3C]/10 text-[#E74C3C] text-xs flex items-center gap-2">
               <AlertCircle size={16} className="shrink-0" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {infoMsg && (
+            <div className="mb-4 p-3 rounded-2xl glass-panel border border-[#2ECC71]/40 bg-[#2ECC71]/10 text-[#1E8E4E] dark:text-[#2ECC71] text-xs flex items-center gap-2">
+              <CheckCircle2 size={16} className="shrink-0" />
+              <span>{infoMsg}</span>
             </div>
           )}
 
