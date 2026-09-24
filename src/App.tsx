@@ -314,6 +314,47 @@ export default function App() {
     prevUserIdRef.current = user.id;
   }, [user.id, resetUserSession]);
 
+  // Cleanly clear local session state without invoking remote signOut
+  const clearLocalSessionState = useCallback(() => {
+    resetUserSession();
+    setCurrentUserId(null);
+    setIsAuthenticated(false);
+    setAccessToken(null);
+    setUser({
+      id: hasSupabaseEnv() ? '' : 'usr_amina_01',
+      email: hasSupabaseEnv() ? '' : 'amina.bekolo@bidou.ai',
+      name: hasSupabaseEnv() ? '' : 'Amina Bekolo',
+      plan_tier: 'free',
+      is_admin: false,
+      language_preference: 'fr',
+      theme_preference: 'dark',
+      created_at: new Date().toISOString(),
+    });
+    setWallet({
+      id: hasSupabaseEnv() ? 'wal_empty' : 'wal_usr_amina_01',
+      user_id: hasSupabaseEnv() ? '' : 'usr_amina_01',
+      balance: hasSupabaseEnv() ? 0 : FREE_TIER_WELCOME_CREDITS,
+      updated_at: new Date().toISOString(),
+    });
+    setCurrentView('landing');
+  }, [resetUserSession]);
+
+  // Guarded handleSignOut for explicit user sign-out action (never loops with auth events)
+  const isSigningOutRef = useRef(false);
+  const handleSignOut = useCallback(async () => {
+    if (isSigningOutRef.current) return;
+    isSigningOutRef.current = true;
+    try {
+      clearLocalSessionState();
+      if (hasSupabaseEnv()) {
+        const supabase = getSupabaseClient();
+        await supabase?.auth.signOut().catch(() => {});
+      }
+    } finally {
+      isSigningOutRef.current = false;
+    }
+  }, [clearLocalSessionState]);
+
   // Live mode Supabase session restoration & auth state subscription
   useEffect(() => {
     if (!hasSupabaseEnv()) {
@@ -329,7 +370,15 @@ export default function App() {
 
     let isMounted = true;
 
+    // Safety watchdog: ensure session resolution never blocks initial app render longer than 2s
+    const sessionTimeout = setTimeout(() => {
+      if (isMounted) {
+        setIsSessionResolving(false);
+      }
+    }, 2000);
+
     supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      clearTimeout(sessionTimeout);
       if (!isMounted) return;
       if (session?.user) {
         const u = session.user;
@@ -356,15 +405,18 @@ export default function App() {
       }
       setIsSessionResolving(false);
     }).catch((err) => {
+      clearTimeout(sessionTimeout);
       console.warn('[App] Session check error:', err);
       if (isMounted) setIsSessionResolving(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
-      if (event === 'SIGNED_OUT' || !session?.user) {
-        handleSignOut();
+      if (event === 'SIGNED_OUT') {
+        // Clear local state only - do NOT call remote signOut() to avoid recursive storm
+        clearLocalSessionState();
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        if (!session?.user) return;
         const u = session.user;
         const profile = await persistence.loadProfile(u.id);
         const resolvedUser: UserProfile = profile || {
@@ -391,7 +443,7 @@ export default function App() {
       isMounted = false;
       subscription?.unsubscribe();
     };
-  }, []);
+  }, [clearLocalSessionState]);
 
   // Auth Handlers
   const handleOpenAuth = (mode: 'signin' | 'signup') => {
@@ -443,34 +495,6 @@ export default function App() {
       console.warn('[handleAuthSuccess] Error checking pending package:', e);
     }
     setCurrentView(targetView);
-  };
-
-  const handleSignOut = async () => {
-    resetUserSession();
-    setCurrentUserId(null);
-    setIsAuthenticated(false);
-    setAccessToken(null);
-    if (hasSupabaseEnv()) {
-      const supabase = getSupabaseClient();
-      await supabase?.auth.signOut().catch(() => {});
-    }
-    setUser({
-      id: hasSupabaseEnv() ? '' : 'usr_amina_01',
-      email: hasSupabaseEnv() ? '' : 'amina.bekolo@bidou.ai',
-      name: hasSupabaseEnv() ? '' : 'Amina Bekolo',
-      plan_tier: 'free',
-      is_admin: false,
-      language_preference: 'fr',
-      theme_preference: 'dark',
-      created_at: new Date().toISOString(),
-    });
-    setWallet({
-      id: hasSupabaseEnv() ? 'wal_empty' : 'wal_usr_amina_01',
-      user_id: hasSupabaseEnv() ? '' : 'usr_amina_01',
-      balance: hasSupabaseEnv() ? 0 : FREE_TIER_WELCOME_CREDITS,
-      updated_at: new Date().toISOString(),
-    });
-    setCurrentView('landing');
   };
 
   // Gated navigation helper

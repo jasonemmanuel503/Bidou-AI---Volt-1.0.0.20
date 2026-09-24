@@ -41,11 +41,11 @@ export const LandingHeader: React.FC<LandingHeaderProps> = ({
       if (scrollTotal > 0) {
         const progress = window.scrollY / scrollTotal;
         // 10% threshold with 8.5% hysteresis to eliminate border jitter
-        if (!isSticky && progress >= 0.1) {
-          setIsSticky(true);
-        } else if (isSticky && progress < 0.085) {
-          setIsSticky(false);
-        }
+        setIsSticky((curr) => {
+          if (!curr && progress >= 0.1) return true;
+          if (curr && progress < 0.085) return false;
+          return curr;
+        });
       } else {
         // Fallback for short screens or early DOM hydration
         setIsSticky(window.scrollY > 320);
@@ -70,7 +70,7 @@ export const LandingHeader: React.FC<LandingHeaderProps> = ({
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleScroll);
     };
-  }, [isSticky]);
+  }, []);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {

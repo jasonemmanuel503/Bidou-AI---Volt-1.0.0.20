@@ -22,66 +22,47 @@ export const BidouLogo: React.FC<BidouLogoProps> = ({
   className = '',
 }) => {
   // Official uploaded asset paths
-  const lightModeJpeg = '/brand/Light%20Mode.jpeg';
-  const lightModePng = '/brand/Light%20Mode.png';
-  const darkModeJpeg = '/brand/Dark%20Mode.jpeg';
-  const darkModePng = '/brand/Dark%20Mode.png';
-
-  const [lightFailed, setLightFailed] = useState(false);
-  const [darkFailed, setDarkFailed] = useState(false);
+  const lightModeSrc = '/brand/light-mode.png';
+  const darkModeSrc = '/brand/dark-mode.png';
 
   const renderMark = () => {
     // 1. Explicit Dark Mode variant
     if (variant === 'dark' || variant === 'dark-transparent' || variant === 'dark-bg') {
-      const isSolidBg = variant === 'dark-bg';
       return (
-        <picture className="flex items-center justify-center">
-          {!isSolidBg && !darkFailed && <source type="image/png" srcSet={darkModePng} />}
-          <img
-            src={isSolidBg ? darkModeJpeg : (darkFailed ? darkModeJpeg : darkModePng)}
-            alt="Bidou AI"
-            width={size}
-            height={size}
-            className="object-contain select-none pointer-events-none transition-opacity duration-150"
-            style={{
-              width: size,
-              height: size,
-              aspectRatio: '1 / 1',
-              imageRendering: '-webkit-optimize-contrast',
-            }}
-            loading="eager"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setDarkFailed(true)}
-          />
-        </picture>
+        <img
+          src={darkModeSrc}
+          alt="Bidou AI"
+          width={size}
+          height={size}
+          className="object-contain select-none pointer-events-none transition-opacity duration-150"
+          style={{
+            width: size,
+            height: size,
+            aspectRatio: '1 / 1',
+          }}
+          loading="eager"
+          decoding="async"
+        />
       );
     }
 
     // 2. Explicit Light Mode variant
     if (variant === 'light' || variant === 'light-transparent' || variant === 'light-bg') {
-      const isSolidBg = variant === 'light-bg';
       return (
-        <picture className="flex items-center justify-center">
-          {!isSolidBg && !lightFailed && <source type="image/png" srcSet={lightModePng} />}
-          <img
-            src={isSolidBg ? lightModeJpeg : (lightFailed ? lightModeJpeg : lightModePng)}
-            alt="Bidou AI"
-            width={size}
-            height={size}
-            className="object-contain select-none pointer-events-none transition-opacity duration-150"
-            style={{
-              width: size,
-              height: size,
-              aspectRatio: '1 / 1',
-              imageRendering: '-webkit-optimize-contrast',
-            }}
-            loading="eager"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setLightFailed(true)}
-          />
-        </picture>
+        <img
+          src={lightModeSrc}
+          alt="Bidou AI"
+          width={size}
+          height={size}
+          className="object-contain select-none pointer-events-none transition-opacity duration-150"
+          style={{
+            width: size,
+            height: size,
+            aspectRatio: '1 / 1',
+          }}
+          loading="eager"
+          decoding="async"
+        />
       );
     }
 
@@ -89,48 +70,36 @@ export const BidouLogo: React.FC<BidouLogoProps> = ({
     return (
       <>
         {/* Light theme logo: Light Mode asset */}
-        <picture className="dark:hidden flex items-center justify-center">
-          {!lightFailed && <source type="image/png" srcSet={lightModePng} />}
-          <img
-            src={lightFailed ? lightModeJpeg : lightModePng}
-            alt="Bidou AI"
-            width={size}
-            height={size}
-            className="object-contain select-none pointer-events-none transition-opacity duration-150"
-            style={{
-              width: size,
-              height: size,
-              aspectRatio: '1 / 1',
-              imageRendering: '-webkit-optimize-contrast',
-            }}
-            loading="eager"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setLightFailed(true)}
-          />
-        </picture>
+        <img
+          src={lightModeSrc}
+          alt="Bidou AI"
+          width={size}
+          height={size}
+          className="dark:hidden object-contain select-none pointer-events-none transition-opacity duration-150"
+          style={{
+            width: size,
+            height: size,
+            aspectRatio: '1 / 1',
+          }}
+          loading="eager"
+          decoding="async"
+        />
 
         {/* Dark theme logo: Dark Mode asset */}
-        <picture className="hidden dark:flex items-center justify-center">
-          {!darkFailed && <source type="image/png" srcSet={darkModePng} />}
-          <img
-            src={darkFailed ? darkModeJpeg : darkModePng}
-            alt="Bidou AI"
-            width={size}
-            height={size}
-            className="object-contain select-none pointer-events-none transition-opacity duration-150"
-            style={{
-              width: size,
-              height: size,
-              aspectRatio: '1 / 1',
-              imageRendering: '-webkit-optimize-contrast',
-            }}
-            loading="eager"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setDarkFailed(true)}
-          />
-        </picture>
+        <img
+          src={darkModeSrc}
+          alt="Bidou AI"
+          width={size}
+          height={size}
+          className="hidden dark:block object-contain select-none pointer-events-none transition-opacity duration-150"
+          style={{
+            width: size,
+            height: size,
+            aspectRatio: '1 / 1',
+          }}
+          loading="eager"
+          decoding="async"
+        />
       </>
     );
   };
