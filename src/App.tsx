@@ -779,8 +779,19 @@ export default function App() {
     }
 
     // Real server-authoritative generation via POST /api/ai/generate
-    const rawToken = await getAuthToken();
+    let rawToken = await getAuthToken();
+    if (!rawToken && hasSupabaseEnv()) {
+      // No session in memory: try one refresh before asking the user to sign in again.
+      try {
+        const { data: refreshed } = await getSupabaseClient()!.auth.refreshSession();
+        rawToken = refreshed.session?.access_token || null;
+      } catch {
+        rawToken = null;
+      }
+    }
     const accessToken = rawToken || (hasSupabaseEnv() ? null : user.id || 'usr_amina_01');
+ 
+(getSupabaseClient is already imported at the top of App.tsx.);
     if (!accessToken) {
       setCurrentJob({
         id: crypto.randomUUID(),
