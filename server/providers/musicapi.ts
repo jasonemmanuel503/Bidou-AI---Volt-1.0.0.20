@@ -40,6 +40,7 @@ export async function startMusicTask(
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
+          custom_mode: true,
           prompt: activePrompt,
           tags: genre,
           title: prompt.slice(0, 50),
@@ -49,7 +50,10 @@ export async function startMusicTask(
       });
 
       if (!response.ok) {
-        throw new Error(`MusicAPI HTTP error: ${response.status} ${response.statusText}`);
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(
+          `MusicAPI HTTP error: ${response.status} ${response.statusText}${errorBody ? ` - ${errorBody}` : ''}`
+        );
       }
 
       const resJson: any = await response.json();
