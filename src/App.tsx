@@ -790,8 +790,6 @@ export default function App() {
       }
     }
     const accessToken = rawToken || (hasSupabaseEnv() ? null : user.id || 'usr_amina_01');
- 
-(getSupabaseClient is already imported at the top of App.tsx.);
     if (!accessToken) {
       setCurrentJob({
         id: crypto.randomUUID(),
