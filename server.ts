@@ -22,6 +22,7 @@ import {
   findJobByIdempotency,
   reserveCreditsForJob,
   createGenerationJob,
+  updateJob,
   insertJobVariants,
   deleteJob,
   getJobWithVariants,
@@ -1128,6 +1129,13 @@ app.post('/api/ai/generate', async (req, res) => {
       });
       reservationId = reservation.reservationId;
       availableBalance = reservation.availableBalance;
+
+      // Persist the reservation onto the job row immediately. Without this,
+      // the database row's reservation_id stays null forever (only an
+      // in-memory copy would have it), so finalizeAndSettleJob can never
+      // find the reservation to refund later, even though it still writes
+      // a credits_refunded value on the job as if it had.
+      await updateJob(jobId, { reservation_id: reservationId });
     } catch (err: any) {
       // Clean up orphaned job row on credit failure
       await deleteJob(jobId);
@@ -2639,4 +2647,3 @@ async function start() {
 }
 
 start().catch(console.error);
-
